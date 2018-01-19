@@ -1,0 +1,13 @@
+NSSLOCALUSER_0 {
+
+global:
+
+	_nss_localuser_gethostbyaddr_r;
+	_nss_localuser_gethostbyname_r;
+	_nss_localuser_gethostbyname2_r;
+
+local:
+
+	*;
+
+};
