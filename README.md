@@ -40,7 +40,7 @@ because IPv6 lakes of loopback range.
 Example: localuser-1024 => ::ffff:127.128.4.0
 
 For details about NSS integration, see
-[Gnu libc documentation][https://www.gnu.org/software/libc/manual/html_node/Name-Service-Switch.html].
+[Gnu libc documentation](https://www.gnu.org/software/libc/manual/html_node/Name-Service-Switch.html).
 
 ## Install
 
