@@ -22,21 +22,21 @@ It is intended to enable distinct IP for distinct users.
 
 The name "localuser" is resolved to the IPv4 address:
 
-```bash
+```
 127.x.y.z
 ```
 
 where x.y.z encode the current user UID in such way that:
 
-```math
+```
 UID = 65536*(x - 128) + 256*y + z
 ```
 
-Allowed UID are from [0 to 4194303] included.
+Allowed UID are from 0 to 4194303 included.
 
 And so:
 
-```python
+```
 z = [0..255]
 y = [0..255]
 x = [128..191]
@@ -44,17 +44,17 @@ x = [128..191]
 
 The names "localuser-${UID}", where UID is a decimal number, are resolved to addresses:
 
-```math
+```
 127.x.y.z
 
-z = UID%255
-y = (UID>>8)%256
-x = (UID>>16)%256+128
+z = UID % 255
+y = (UID >> 8) % 256
+x = ((UID >> 16) % 256) + 128
 ```
 
 Examples:
 
-```bash
+```
 localuser      => 127.128.0.0   (when user has UID = 0)
 localuser      => 127.128.3.233 (when user has UID = 1001)
 localuser-1024 => 127.128.4.0   (for any user)
@@ -67,7 +67,7 @@ because IPv6 lakes of loopback range.
 
 Example:
 
-```bash
+```
 localuser-1024 => ::ffff:127.128.4.0
 ```
 
@@ -78,7 +78,7 @@ For details about NSS integration, see
 
 To install this file:
 
-```bash
+```
 make all && sudo install
 ```
 
@@ -88,7 +88,7 @@ script detect-nssdir.sh.
 If that gives the wrong result define the
 variable nssdir when calling make, as below:
 
-```bash
+```
 make install nssdir=~/lib
 ```
 
@@ -98,14 +98,13 @@ line starting with "`hosts:`".
 
 Your nsswitch file can then looks like that at the end:
 
-```bash
-# /etc/nsswitch.conf
+<pre># /etc/nsswitch.conf
 
 passwd:     files sss systemd
 shadow:     files sss
 group:      files sss systemd
 
-hosts:      localuser files dns myhostname
+hosts:      <b>localuser</b> files dns myhostname
 
 ethers:     files
 netmasks:   files
@@ -113,5 +112,4 @@ networks:   files
 protocols:  files
 services:   files sss
 
-aliases:    files nisplus
-```
+aliases:    files nisplus</pre>
