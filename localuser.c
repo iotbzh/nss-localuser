@@ -24,28 +24,65 @@
  * -----------
  *  This source file provides NSS (Name Service Switch -see [1]-) facilities
  *  for defining a virtual host of name localuser that resolves to an address
- *  of the localhost that integrate user ID.
+ *  of the localhost that integrate user ID and/or application ID.
  *
- *  The name "localuser" is resolved to the IPv4 address 127.x.y.z
- *  where x.y.z resolves to the current user UID = 65536*(x - 128) + 256*y + z
- *
- *  The name "localuser-UID" is resolved to the address 127.x.y.z
- *  where UID = 65536*(x - 128) + 256*y + z
- *
- *  Allowed UID are from 0 to 4194303 included.
- *
+ *  It defines the family  *"localuser"* of virtual hostnames as one of the
+ *  below names:
+ *  
+ *  - localuser
+ *  - localuser-UID
+ *  - localuser--APPID
+ *  - localuser-UID-APPID
+ *  - localuser---APPID
+ *  
+ *  This can be summarized by the following matrix:
+ *  
+ *    |------------------|------------------|---------------------|-------------------|
+ *    |                  | **current user** | **user of UID**     | **no user**       |
+ *    |------------------|------------------|---------------------|-------------------|
+ *    | **no APP**       | localuser        | localuser-UID       |                   |
+ *    | **app of APPID** | localuser--APPID | localuser-UID-APPID | localuser---APPID |
+ *    |------------------|------------------|---------------------|-------------------|
+ *  
+ *  The delivered NSS service defines one virtual host of name `localuser`
+ *  that resolves to an IP address of the localhost loopback that integrates
+ *  user ID.
+ *  
+ *  It is intended to enable distinct IP for distinct users, distinct application.
+ *  
+ *  The name *localuser* family is resolved to the IPv4 address range 127.128.0.0/9
+ *  
+ *  The delivered IPv4 address is structured as follow:
+ *  
+ *  ```text
+ *  +--------+--------+--------+--------+
+ *  :01111111:1abbcccc:dddddeee:ffffffff:
+ *  +--------+--------+--------+--------+
+ *  ```
+ *  
+ *  When `a` is `1`, the value 11 bits value `bbccccddddd` encodes the APPID
+ *  and the 11 bits value `eeedddddddd` encodes the UID.
+ *  This is represented by the following hostnames: `localuser--APPID`
+ *  and `localuser-UID-APPID`.
+ *  
+ *  When `abb` is `011`, the 20 bits value `ccccdddddeeeffffffff` encodes the APPID.
+ *  This is represented by the following hostnames: `localuser---APPID`.
+ *  
+ *  When `abb` is `010`, the 20 bits value `ccccdddddeeeffffffff` encodes the UID.
+ *  This is represented by the following hostnames: `localuser`
+ *  and `localuser-UID`.
+ *  
+ *  The values `000` and `001` of `abb` are reserved for futur use.
+ *  
  *  Examples:
- *    localuser      => 127.128.0.0   (when UID = 0)
- *    localuser      => 127.128.3.233 (when UID = 1001)
- *    localuser-1024 => 127.128.4.0   (always)
- *
- *  This module provides the reverse resolution.
- *
- *  This module provides a value for IPv6: it translate to a IPv4-mapped IPv6 address
- *  because IPv6 lakes of loopback range.
- *
- *  Example: localuser-1024 => ::ffff:127.128.4.0
- *
+ *  
+ *  ```text
+ *  localuser      => 127.128.0.0   (when user has UID = 0)
+ *  localuser      => 127.128.3.233 (when user has UID = 1001)
+ *  localuser-1024 => 127.128.4.0   (for any user)
+ *  ```
+ *  
+ *  The service also provides the reverse resolution.
  * links
  * -----
  *  [1] https://www.gnu.org/software/libc/manual/html_node/Name-Service-Switch.html
@@ -60,98 +97,289 @@
 /* string for "localuser" */
 static const char localuser[] = "localuser";
 static const char separator = '-';
+#define MAXNAMELEN 40
 
 /* defines the length of adresses */
 static const int lenip4 = 4;
 static const int lenip6 = 16;
 
 /* masks for IPv4 adresses */
-static const uint32_t prefix_mask  = 0xffc00000u; /* 255.192.0.0 */
+static const uint32_t prefix_mask  = 0xff800000u; /* 255.128.0.0 */
 static const uint32_t prefix_value = 0x7f800000u; /* 127.128.0.0 */
-static const uint32_t locusr_mask  = 0x003fffffu; /* 0.63.255.255 */
 
-/* return the IPv4 localuser address for 'uid' */
-static uint32_t get_localuser(uint32_t uid)
+static const uint32_t locusr_both_ids_mask         = 0x7fc00000u;
+static const uint32_t locusr_both_ids_prefix       = 0x7fc00000u;
+static const uint32_t locusr_both_ids_uid_max      = 0x000007ffu;
+static const uint32_t locusr_both_ids_uid_mask     = 0x000007ffu;
+static const uint32_t locusr_both_ids_appid_max    = 0x000007ffu;
+static const uint32_t locusr_both_ids_appid_mask   = 0x000007ffu;
+static const uint8_t  locusr_both_ids_appid_shift  = 11;
+
+static const uint32_t locusr_appid_only_mask       = 0x7ff00000u;
+static const uint32_t locusr_appid_only_prefix     = 0x7fb00000u;
+static const uint32_t locusr_appid_only_appid_max  = 0x000fffffu;
+static const uint32_t locusr_appid_only_appid_mask = 0x000fffffu;
+
+static const uint32_t locusr_uid_only_mask         = 0x7ff00000u;
+static const uint32_t locusr_uid_only_prefix       = 0x7fa00000u;
+static const uint32_t locusr_uid_only_uid_max      = 0x000fffffu;
+static const uint32_t locusr_uid_only_uid_mask     = 0x000fffffu;
+
+/* structure for coding/decoding */
+struct lud
 {
-	uint32_t adr = (uint32_t)(prefix_value | (locusr_mask & uid));
-	return htonl(adr);
+	unsigned has_uid: 1;	/* has a uid */
+	unsigned has_appid: 1;	/* has a appid */
+	uint32_t uid;		/* uid if any */
+	uint32_t appid;		/* appid if any */
+	uint32_t ipv4;		/* IPv4 representation */
+	uint32_t len;		/* name length */
+	char name[MAXNAMELEN];	/* name value */
+};
+
+/* read a 32 bits integer. returns its length in character or -1 on overflow */
+static int read_u32(const char *str, uint32_t *val)
+{
+	char c;
+	int p;
+	uint32_t a, b;
+
+	a = 0;
+	c = str[p = 0];
+	while ('0' <= c && c <= '9') {
+		b = (a << 3) + (a << 1) + (uint32_t)(c - '0');
+		if (b < a)
+			return -1; /* overflow */
+		a = b;
+		c = str[++p];
+	}
+	*val = a;
+	return p;
 }
 
-/* is 'ip' a localuser IPv4 address ? */
-static int is_localuser(uint32_t ip)
+/* write a 32 bits integer and return the count of char writen */
+static unsigned write_u32(char *str, uint32_t val)
 {
-	return prefix_value == (ntohl(ip) & prefix_mask);
+	unsigned w, l, u;
+	char c;
+
+	l = w = 0;
+	while (val > 9) {
+		str[w++] = (char)('0' + val % 10);
+		val /= 10;
+	}
+	str[w++] = (char)('0' + val);
+	u = w;
+	while (--u > l) {
+		c = str[u];
+		str[u] = str[l];
+		str[l++] = c;
+	}
+	return w;
 }
 
-/* return the user of the localuser IPv4 'ip' */
-static uint32_t uid_of_localuser(uint32_t ip)
+static void encode_name(struct lud *lud)
 {
-	return (ntohl(ip) & locusr_mask);
+	unsigned i;
+
+	/* encode "localuser-" */
+	i = (int)(sizeof localuser - 1);
+	memcpy(lud->name, localuser, i);
+
+	/* encode the UID if needed */
+	if (!lud->has_uid) {
+		lud->name[i++] = separator;
+		lud->name[i++] = separator;
+	} else if (lud->uid != (uint32_t)getuid()) {
+		lud->name[i++] = separator;
+		i += write_u32(&lud->name[i], lud->uid);
+	} else if (lud->has_appid)
+		lud->name[i++] = separator;
+
+	/* encode the APPID if needed */
+	if (lud->has_appid) {
+		lud->name[i++] = separator;
+		i += write_u32(&lud->name[i], lud->appid);
+	}
+
+	/* finish */
+	lud->len = i;
+	lud->name[i] = 0;
 }
 
-/* put in 'buffer' the IPv4 localuser address for 'uid' */
-static void getIPv4(uint32_t *buffer, uint32_t uid)
+/*
+ * Decode the name if valid and stores its ip in lud
+ * Returns:
+ *   - 0: not a localuser name
+ *   - 1: valid local user name
+ *   - -1: invalid localuser name
+ *   - -2: out of range localuser name
+ */
+static int decode_name(const char *name, struct lud *lud)
 {
-	buffer[0] = get_localuser(uid);
+	int i, r;
+	uint32_t adr;
+
+	/* test the prefix of the name */
+	i = (int)(sizeof localuser - 1);
+	if (strncmp(name, localuser, (size_t)i) != 0)
+		return 0;
+
+	/* prefix matches "localuser" */
+	if (!name[i]) {
+		/* terminated string: "localuser" */
+		lud->has_uid = 1;
+		lud->uid = (uint32_t)getuid(); /* use current UID */
+		lud->has_appid = 0;
+	} else {
+		/* should be "localuser-..." */
+		if (name[i] != separator)
+			return -1;
+		/* found "localuser-..." */
+		if (name[++i] == separator) {
+			/* found "localuser--..." */
+			if (name[++i] == separator) {
+				/* found "localuser---..." */
+				++i;
+				lud->has_uid = 0;
+			} else {
+				/* found "localuser--x.." */
+				lud->uid = (uint32_t)getuid(); /* use current UID */
+				lud->has_uid = 1;
+			}
+			lud->has_appid = 1;
+		} else {
+			/* found "localuser-X..." with X not being a dash */
+			r = read_u32(&name[i], &lud->uid);
+			if (r <= 0)
+				return -1;
+			/* found "localuser-UID..." */
+			i += r;
+			lud->has_uid = 1;
+			if (name[i] != separator)
+				lud->has_appid = 0;
+			else {
+				/* found "localuser-UID-..." */
+				i++;
+				lud->has_appid = 1;
+			}
+		}
+		/* look if appid must be read */
+		if (lud->has_appid) {
+			/* found "localuser-[UID|-]-..."  */
+			r = read_u32(&name[i], &lud->appid);
+			if (r <= 0)
+				return -1;
+			/* found "localuser-[UID|-]-APPID..."  */
+			i += r;
+		}
+		/* the name should be finished now */
+		if (name[i])
+			return -1;
+	}
+
+	/* encode the address */
+	if (lud->has_appid && lud->has_uid) {
+		/* case of UID and APPID */
+		if (lud->appid > locusr_both_ids_appid_max)
+			return -2;
+		if (lud->uid > locusr_both_ids_uid_max)
+			return -2;
+		adr = (uint32_t)(locusr_both_ids_prefix
+				 | (lud->appid << locusr_both_ids_appid_shift)
+				 | lud->uid);
+	} else if (lud->has_appid) {
+		/* case of only APPID */
+		if (lud->appid > locusr_appid_only_appid_max)
+			return -2;
+		adr = (uint32_t)(locusr_appid_only_prefix | lud->appid);
+	} else {
+		/* case of only UID */
+		if (lud->uid > locusr_uid_only_uid_max)
+			return -2;
+		adr = (uint32_t)(locusr_uid_only_prefix | lud->uid);
+	}
+	lud->ipv4 = htonl(adr);
+
+	encode_name(lud);
+	return 1;
 }
 
-/* is 'buffer' pointing a localuser IPv4 address ? */
-static int isIPv4(const uint32_t *buffer)
+/*
+ * Decode the ipv4 if valid and stores its data in lud
+ * Returns:
+ *   - 0: not a localuser ip
+ *   - 1: valid local user ip
+ *   - -1: invalid localuser ip
+ */
+static int decode_ipv4(uint32_t ipv4, struct lud *lud)
 {
-	return is_localuser(buffer[0]);
-}
+	uint32_t adr;
 
-/* return the user of the localuser IPv4 pointed by 'buffer' */
-static uint32_t uidIPv4(const uint32_t *buffer)
-{
-	return uid_of_localuser(buffer[0]);
-}
+	/* check the address range */
+	adr = ntohl(ipv4);
+	if ((adr & prefix_mask) != prefix_value)
+		return 0;
 
-/* put in 'buffer' the IPv6 localuser address for 'uid' */
-static void getIPv6(uint32_t *buffer, uint32_t uid)
-{
-	buffer[0] = 0;
-	buffer[1] = 0;
-	buffer[2] = htonl(0xffff);
-	buffer[3] = get_localuser(uid);
-}
+	/* decode */
+	lud->ipv4 = ipv4;
+	if ((adr & locusr_both_ids_mask) == locusr_both_ids_prefix) {
+		lud->has_uid = 1;
+		lud->has_appid = 1;
+		lud->uid = adr & locusr_both_ids_uid_mask;
+		if (lud->uid > locusr_both_ids_uid_max)
+			return -1;
+		lud->appid = (adr >> locusr_both_ids_appid_shift) & locusr_both_ids_appid_mask;
+		if (lud->appid > locusr_both_ids_appid_max)
+			return -1;
+	} else  if ((adr & locusr_appid_only_mask) == locusr_appid_only_prefix) {
+		lud->has_uid = 0;
+		lud->has_appid = 1;
+		lud->appid = adr & locusr_appid_only_appid_mask;
+		if (lud->appid > locusr_appid_only_appid_max)
+			return -1;
+	} else if ((adr & locusr_uid_only_mask) == locusr_uid_only_prefix) {
+		lud->has_uid = 1;
+		lud->has_appid = 0;
+		lud->uid = adr & locusr_uid_only_uid_mask;
+		if (lud->uid > locusr_uid_only_uid_max)
+			return -1;
+	} else {
+		/* reserved address */
+		return -1;
+	}
 
-/* is 'buffer' pointing a localuser IPv6 address ? */
-static int isIPv6(const uint32_t *buffer)
-{
-	return buffer[0] == 0 && buffer[1] == 0
-	    && buffer[2] == htonl(0xffff) && is_localuser(buffer[3]);
-}
-
-/* return the user of the localuser IPv6 pointed by 'buffer' */
-static uint32_t uidIPv6(const uint32_t *buffer)
-{
-	return uid_of_localuser(buffer[3]);
+	encode_name(lud);
+	return 1;
 }
 
 /* fill the output entry */
 static enum nss_status fillent(
-	const char *name,
+	struct lud *lud,
 	int af,
 	struct hostent *result,
 	char *buffer,
 	size_t buflen,
 	int *errnop,
-	int *h_errnop,
-	uint32_t uid)
+	int *h_errnop)
 {
-	int alen = 1 + (int)strlen(name);
-	int len = af == AF_INET ? lenip4 : lenip6;
+	uint32_t *bufip;
+	int len, alen;
 
 	/* check the family */
-	if (af != AF_INET && af != AF_INET6) {
+	if (af == AF_INET)
+		len = lenip4;
+	else if (af == AF_INET6)
+		len = lenip6;
+	else {
 		*errnop = EINVAL;
 		*h_errnop = NO_RECOVERY;
 		return NSS_STATUS_UNAVAIL;
 	}
 
 	/* fill aliases and addr_list */
-	if (buflen < 2 * sizeof result->h_aliases[0] + alen + len) {
+	alen = 1 + lud->len;
+	if (buflen < (2 * sizeof result->h_aliases[0]) + alen + len) {
 		*errnop = ERANGE;
 		*h_errnop = NO_RECOVERY;
 		return NSS_STATUS_TRYAGAIN;
@@ -163,10 +391,16 @@ static enum nss_status fillent(
 	result->h_addr_list = (char**)buffer;
 	result->h_addr_list[0] = (char*)&result->h_addr_list[2];
 	result->h_name = &result->h_addr_list[0][len];
+	memcpy(result->h_name, lud->name, alen);
 	result->h_aliases = &result->h_addr_list[1];
 	result->h_addr_list[1] = NULL;
-	(af == AF_INET ? getIPv4 : getIPv6)((uint32_t*)result->h_addr_list[0], uid);
-	memcpy(result->h_name, name, alen);
+	bufip = (uint32_t*)result->h_addr_list[0];
+	if (af == AF_INET6) {
+		*bufip++ = 0;
+		*bufip++ = 0;
+		*bufip++ = htonl(0xffff);
+	}
+	*bufip = lud->ipv4;
 
 	return NSS_STATUS_SUCCESS;
 }
@@ -181,36 +415,10 @@ enum nss_status _nss_localuser_gethostbyname2_r(
 	int *errnop,
 	int *h_errnop)
 {
-	int valid;
-	uint32_t uid;
-	const char *i;
-	char c;
+	struct lud lud;
 
-	/* test the name */
-	valid = !strncmp(name, localuser, sizeof localuser - 1);
-	if (valid) {
-		c = name[sizeof localuser - 1];
-		if (!c) {
-			/* terminated string: use current UID */
-			uid = (uint32_t)getuid();
-		} else if (c != separator) {
-			valid = 0;
-		} else {
-			/* has a uid specification */
-			i = &name[sizeof localuser];
-			c = *i;
-			valid = '0' <= c && c <= '9';
-			if (valid) {
-				uid = (uint32_t)(c - '0');
-				while ((c = *++i) && (valid = '0' <= c && c <= '9')) {
-					uid = (uid << 3) + (uid << 1) + (uint32_t)(c - '0');
-				}
-				if (valid)
-					valid = uid == (uid & locusr_mask);
-			}
-		}
-	}
-	if (!valid) {
+	/* decode the name */
+	if (decode_name(name, &lud) <= 0) {
 		*h_errnop = HOST_NOT_FOUND;
 		return NSS_STATUS_NOTFOUND;
 	}
@@ -220,7 +428,7 @@ enum nss_status _nss_localuser_gethostbyname2_r(
 		af = AF_INET;
 
 	/* fill the result */
-	return fillent(name, af, result, buffer, buflen, errnop, h_errnop, uid);
+	return fillent(&lud, af, result, buffer, buflen, errnop, h_errnop);
 }
 
 /* use gethostbyname2 implementation */
@@ -250,9 +458,9 @@ enum nss_status _nss_localuser_gethostbyaddr_r(
 	int *errnop,
 	int *h_errnop)
 {
-	char c, name[40 + sizeof localuser];
-	uint32_t uid, x;
-	int l, u;
+	struct lud lud;
+	const uint32_t *bufip = (const uint32_t*)addr;
+	int check;
 
 	/* set default family */
 	if (af == AF_UNSPEC) {
@@ -262,40 +470,16 @@ enum nss_status _nss_localuser_gethostbyaddr_r(
 			af = AF_INET6;
 	}
 
-	/* check whether the IP comforms to localuser */
-	if (af == AF_INET && len == lenip4 && isIPv4((const uint32_t*)addr)) {
-		/* yes, it's a IPv4, get the uid */
-		uid = uidIPv4((const uint32_t*)addr);
-	} else if (af == AF_INET6 && len == lenip6 && isIPv6((const uint32_t*)addr)) {
-		/* yes, it's a IPv6, get the uid */
-		uid = uidIPv6((const uint32_t*)addr);
-	} else {
-		/* no */
-		/* fail */
-		*errnop = EINVAL;
-		*h_errnop = NO_RECOVERY;
-		return NSS_STATUS_NOTFOUND;
-	}
+	/* pre process of ipv6 */
+	if (af == AF_INET6 && len == lenip6)
+		check = (*bufip++ == 0 && *bufip++ == 0 && *bufip++ == htonl(0xffff));
+	else
+		check = (af == AF_INET && len == lenip4);
 
-	/* build the name */
-	memcpy(name, localuser, sizeof localuser - 1);
-	if (uid == (uint32_t)getuid())
-		name[sizeof localuser - 1] = 0;
-	else {
-		x = uid;
-		name[sizeof localuser - 1] = separator;
-		l = u = (int)sizeof localuser;
-		do {
-			name[u++] = (char)('0' + x % 10);
-			x /= 10;
-		} while(x);
-		name[u--] = 0;
-		while (u > l) {
-			c = name[u];
-			name[u--] = name[l];
-			name[l++] = c;
-		}
-	}
-	/* fill the result */
-	return fillent(name, af, result, buffer, buflen, errnop, h_errnop, uid);
+	if (check && decode_ipv4(*bufip, &lud) == 1)
+		return fillent(&lud, af, result, buffer, buflen, errnop, h_errnop);
+
+	*errnop = EINVAL;
+	*h_errnop = NO_RECOVERY;
+	return NSS_STATUS_NOTFOUND;
 }

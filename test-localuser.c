@@ -20,6 +20,7 @@
  * THE SOFTWARE.
  */
 #include <stdio.h>
+#include <stdint.h>
 #include <netdb.h>
 
 void dumphostent(char *tag, char *arg, struct hostent *h)
@@ -33,6 +34,12 @@ void dumphostent(char *tag, char *arg, struct hostent *h)
 				(int)(unsigned char)h->h_addr_list[0][1],
 				(int)(unsigned char)h->h_addr_list[0][2],
 				(int)(unsigned char)h->h_addr_list[0][3]);
+		else if (h->h_addrtype == AF_INET6)
+			printf("ipv6: %08lx.%08lx.%08lx.%08lx\n",
+				(long)ntohl(((uint32_t*)h->h_addr_list[0])[0]),
+				(long)ntohl(((uint32_t*)h->h_addr_list[0])[1]),
+				(long)ntohl(((uint32_t*)h->h_addr_list[0])[2]),
+				(long)ntohl(((uint32_t*)h->h_addr_list[0])[3]));
 	} else {
 		printf("NULL!\n");
 	}
@@ -45,6 +52,14 @@ int main(int ac, char **av)
 
 	while (*++av) {
 		h = gethostbyname2(*av, AF_INET);
+		dumphostent("name->addr", *av, h);
+
+		if (h) {
+			h = gethostbyaddr(h->h_addr_list[0], h->h_length, h->h_addrtype);
+			dumphostent("addr->name", *av, h);
+		}
+
+		h = gethostbyname2(*av, AF_INET6);
 		dumphostent("name->addr", *av, h);
 
 		if (h) {
