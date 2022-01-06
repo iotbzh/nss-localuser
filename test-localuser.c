@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 IoT.bzh <jose.bollo@iot.bzh>
+ * Copyright 2018-2022 IoT.bzh Company <jose.bollo@iot.bzh>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
