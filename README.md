@@ -25,12 +25,10 @@ below names:
 
 This can be summarized by the following matrix:
 
-  |------------------|------------------|---------------------|-------------------|
   |                  | **current user** | **user of UID**     | **no user**       |
   |------------------|------------------|---------------------|-------------------|
   | **no APP**       | localuser        | localuser-UID       |                   |
   | **app of APPID** | localuser--APPID | localuser-UID-APPID | localuser---APPID |
-  |------------------|------------------|---------------------|-------------------|
 
 The delivered NSS service defines one virtual host of name `localuser`
 that resolves to an IP address of the localhost loopback that integrates
